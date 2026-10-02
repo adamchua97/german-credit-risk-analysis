@@ -1,0 +1,215 @@
+---
+title: "GBA6210 Case Study R-Code"
+author: "Adam Chua"
+date: "2026-04-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+###21.2 German Credit
+**GermanCredit.csv** is the dataset for this case study.
+
+###Background
+Money-lending has been around since the advent of money; it is perhaps the world’s second-oldest profession. The systematic evaluation of credit risk, though, is a relatively recent arrival, and lending was largely based on reputation and very incomplete data. Thomas Jefferson, the third President of the United States, was in debt throughout his life and unreliable in his debt payments, yet people continued to lend him money. It wasn’t until the beginning of the 20th century that the Retail Credit Company was founded to share information about credit. That company is now Equifax, one of the big three credit scoring agencies (the other two are Transunion and Experion).
+
+Individual and local human judgment are now largely irrelevant to the credit reporting process. Credit agencies and other big financial institutions extending credit at the retail level collect huge amounts of data to predict whether defaults or other adverse events will occur, based on numerous customer and transaction information.
+
+###Data
+This case deals with an early stage of the historical transition to predictive modeling, in which humans were employed to label records as either good or poor credit. The German Credit dataset22 has 30 variables and 1000 records, each record being a prior applicant for credit. Each applicant was rated as “good credit” (700 cases) or “bad credit” (300 cases). New applicants for credit can also be evaluated on these 30 predictor variables and classified as a good or a bad credit risk based on the predictor values.
+
+---
+
+```{r}
+
+# Load case study data
+df <- read.csv("GermanCredit.csv", header = TRUE)
+head(df)
+
+```
+
+
+---
+### Quick Data Inspection
+
+```{r}
+
+# Basic Structure
+dim(df)          # rows x columns
+str(df)          # data types of each column
+head(df, 10)     # first 10 rows
+tail(df, 5)      # last 5 rows
+
+```
+```{r}
+# 4. Missing values
+colSums(is.na(df))
+mean(is.na(df))
+sum(is.na(df))
+```
+```{r}
+# 5. Duplicate rows
+sum(duplicated(df))
+```
+
+```{r}
+# 6. Summary statistics
+summary(df)
+```
+
+
+
+```{r}
+# Drop OBS. column
+df <- df[, -1]
+
+```
+
+---
+### Objective 2: Coding Part of the Assignment
+
+Divide the data into training and validation partitions, and develop classification models using the following data mining techniques in R: logistic regression,classification trees, and neural networks.
+```{r}
+
+library(caret)
+
+# seed
+set.seed(1)
+
+
+# Partition into training and valid sets with 70/30 split respectively
+train_rows <- sample(rownames(df), 0.7*nrow(df))
+train_df <- df[train_rows, ]
+
+
+# The remaining subset (30%) will be the valid set
+valid_df <- df[setdiff(rownames(df), train_rows), ]
+
+
+prop.table(table(train_df$RESPONSE))
+prop.table(table(valid_df$RESPONSE))
+```
+
+
+---
+---
+
+
+##Classification Tree Model
+
+```{r}
+library(rpart)
+library(rpart.plot)
+
+# Train initial CT model
+ct_model <- rpart(RESPONSE ~ ., data = train_df, method = "class")
+
+# Visualize tree model
+prp(ct_model, type = 1, extra = 1, split.font = 1, under = TRUE, varlen = -10)
+
+```
+
+```{r}
+
+# Classification Tree — confusion matrix with "prob" type
+ct_model_pred <- predict(ct_model, valid_df, type = "prob")[, 2] # make predictions
+ct_pred_class <- ifelse(ct_model_pred > 0.5, 1, 0)
+confusionMatrix(factor(ct_pred_class), factor(valid_df$RESPONSE), positive = "1")
+
+```
+```{r}
+# Classification Tree — confusion matrix with "class" type
+ct_model_pred <- predict(ct_model, valid_df, type = "class") # make predictions
+confusionMatrix(ct_model_pred, factor(valid_df$RESPONSE), positive = "1")
+
+```
+Classification Tree CM Results:
+
+Accuracy: 71.33% — lower than logistic regression
+Sensitivity: 85.10% — slightly lower than logistic regression
+Specificity: 40.22% — noticeably worse, approving even more bad applicants
+Net Profit: (177 × 100) + (55 × -500) = 17,700 - 27,500 = -9,800 DM
+
+
+---
+---
+
+### Optimization through lowest xerror
+```{r}
+
+# Create table of complexity parameter (CP) values and associated tree errors
+cv.ct <- rpart(RESPONSE ~ ., data = train_df, method = "class", 
+               cp = 0.00001, minsplit = 5, xval = 5)
+
+# print the table
+printcp(cv.ct)
+```
+
+
+```{r}
+# Prune the tree by using the CP that yielded the lowest xerror
+pruned.ct <- prune(cv.ct, cp = cv.ct$cptable[which.min(cv.ct$cptable[,"xerror"]),"CP"])
+
+length(pruned.ct$frame$var[pruned.ct$frame$var == "<leaf>"])
+prp(pruned.ct, type = 1, extra = 1, split.font = 1, varlen = -10)
+
+```
+
+
+```{r}
+
+# Confusion matrix for pruned tree
+pruned_pred <- predict(pruned.ct, valid_df, type = "class")
+confusionMatrix(pruned_pred, factor(valid_df$RESPONSE), positive = "1")
+
+
+```
+
+---
+---
+
+### Optimization through Best-Pruned tree (1 - SE Rule, simpler tree)
+```{r}
+# print the table
+printcp(cv.ct)
+```
+
+
+```{r}
+# 1-SE rule: select simplest tree within 1 standard error of minimum xerror
+min_xerror <- min(cv.ct$cptable[, "xerror"])
+min_xstd   <- cv.ct$cptable[which.min(cv.ct$cptable[, "xerror"]), "xstd"]
+threshold  <- min_xerror + min_xstd
+
+```
+
+```{r}
+
+# Select highest CP whose xerror is within the threshold
+best_cp <- cv.ct$cptable[cv.ct$cptable[, "xerror"] <= threshold, "CP"]
+best_cp <- max(best_cp)
+print(best_cp)
+print(threshold)
+
+```
+
+```{r}
+
+# Prune using 1-SE CP
+pruned.ct.1se <- prune(cv.ct, cp = best_cp)
+length(pruned.ct.1se$frame$var[pruned.ct.1se$frame$var == "<leaf>"])
+prp(pruned.ct.1se, type = 1, extra = 1, split.font = 1, varlen = -10)
+
+
+```
+
+
+```{r}
+# Confusion matrix for 1-SE pruned tree
+pruned_1se_pred  <- predict(pruned.ct.1se, valid_df, type = "class")
+confusionMatrix(pruned_1se_pred, factor(valid_df$RESPONSE), positive = "1")
+
+```
+

@@ -1,0 +1,275 @@
+---
+title: "GBA6210 Case Study R-Code"
+author: "Adam Chua"
+date: "2026-04-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+###21.2 German Credit
+**GermanCredit.csv** is the dataset for this case study.
+
+###Background
+Money-lending has been around since the advent of money; it is perhaps the world’s second-oldest profession. The systematic evaluation of credit risk, though, is a relatively recent arrival, and lending was largely based on reputation and very incomplete data. Thomas Jefferson, the third President of the United States, was in debt throughout his life and unreliable in his debt payments, yet people continued to lend him money. It wasn’t until the beginning of the 20th century that the Retail Credit Company was founded to share information about credit. That company is now Equifax, one of the big three credit scoring agencies (the other two are Transunion and Experion).
+
+Individual and local human judgment are now largely irrelevant to the credit reporting process. Credit agencies and other big financial institutions extending credit at the retail level collect huge amounts of data to predict whether defaults or other adverse events will occur, based on numerous customer and transaction information.
+
+###Data
+This case deals with an early stage of the historical transition to predictive modeling, in which humans were employed to label records as either good or poor credit. The German Credit dataset22 has 30 variables and 1000 records, each record being a prior applicant for credit. Each applicant was rated as “good credit” (700 cases) or “bad credit” (300 cases). New applicants for credit can also be evaluated on these 30 predictor variables and classified as a good or a bad credit risk based on the predictor values.
+
+---
+
+```{r}
+
+# Load case study data
+df <- read.csv("GermanCredit.csv", header = TRUE)
+head(df)
+
+```
+
+
+---
+### Quick Data Inspection
+
+```{r}
+
+# Basic Structure
+dim(df)          # rows x columns
+str(df)          # data types of each column
+head(df, 10)     # first 10 rows
+tail(df, 5)      # last 5 rows
+
+```
+```{r}
+# 4. Missing values
+colSums(is.na(df))
+mean(is.na(df))
+sum(is.na(df))
+```
+```{r}
+# 5. Duplicate rows
+sum(duplicated(df))
+```
+
+```{r}
+# 6. Summary statistics
+summary(df)
+```
+
+
+
+```{r}
+# Drop OBS. column
+df <- df[, -1]
+
+```
+
+---
+### Objective 2: Coding Part of the Assignment
+
+Divide the data into training and validation partitions, and develop classification models using the following data mining techniques in R: logistic regression,classification trees, and neural networks.
+```{r}
+
+library(caret)
+
+# seed
+set.seed(1)
+
+
+# Partition into training and valid sets with 70/30 split respectively
+train_rows <- sample(rownames(df), 0.7*nrow(df))
+train_df <- df[train_rows, ]
+
+
+# The remaining subset (30%) will be the valid set
+valid_df <- df[setdiff(rownames(df), train_rows), ]
+
+
+prop.table(table(train_df$RESPONSE))
+prop.table(table(valid_df$RESPONSE))
+```
+---
+---
+
+##Logistic Regression Model
+
+```{r}
+
+# Train initial logistic regression model
+logit_model <- glm(RESPONSE ~ ., data = train_df, family = binomial)
+
+# Display summary
+options(scipen=999)
+summary(logit_model)
+
+```
+```{r}
+# Predict probabilities on validation set
+logit_model_pred <- predict(logit_model, valid_df, type = "response")
+
+# Convert to binary predictions using 0.5 cutoff
+logit_pred_class <- ifelse(logit_model_pred > 0.5, 1, 0)
+
+# Confusion matrix
+confusionMatrix(as.factor(logit_pred_class), as.factor(valid_df$RESPONSE), positive = "1")
+
+```
+Logistic Regression CM Results:
+
+
+Accuracy: 75.33% — decent overall performance
+Sensitivity: 86.06% — good at identifying actual good credit applicants
+Specificity: 51.09% — weaker at catching bad credit applicants, meaning a lot of bad applicants are being approved
+Net Profit: (179 × 100) + (45 × -500) = 17,900 - 22,500 = -4,600 DM
+
+---
+---
+
+
+##Classification Tree Model
+
+```{r}
+library(rpart)
+library(rpart.plot)
+
+# Train initial CT model
+ct_model <- rpart(RESPONSE ~ ., data = train_df, method = "class")
+
+# Visualize tree model
+prp(ct_model, type = 1, extra = 1, split.font = 1, under = TRUE, varlen = -10)
+
+```
+
+```{r}
+
+# Classification Tree — confusion matrix with "prob" type
+ct_model_pred <- predict(ct_model, valid_df, type = "prob")[, 2] # make predictions
+ct_pred_class <- ifelse(ct_model_pred > 0.5, 1, 0)
+confusionMatrix(factor(ct_pred_class), factor(valid_df$RESPONSE), positive = "1")
+
+```
+```{r}
+# Classification Tree — confusion matrix with "class" type
+ct_model_pred <- predict(ct_model, valid_df, type = "class") # make predictions
+confusionMatrix(ct_model_pred, factor(valid_df$RESPONSE), positive = "1")
+
+```
+Classification Tree CM Results:
+
+Accuracy: 71.33% — lower than logistic regression
+Sensitivity: 85.10% — slightly lower than logistic regression
+Specificity: 40.22% — noticeably worse, approving even more bad applicants
+Net Profit: (177 × 100) + (55 × -500) = 17,700 - 27,500 = -9,800 DM
+
+
+---
+---
+
+
+##Neural Network Model
+
+```{r}
+library(nnet)
+
+# Fit normalization parameters on training set (exclude RESPONSE)
+norm.values <- preProcess(train_df[, -ncol(train_df)], method = c("center", "scale"))
+
+
+# Create placeholder copies from the original to store the normalized data
+train_norm_df <- train_df
+valid_norm_df <- valid_df
+norm_df <- df
+
+
+# Apply to train, validation, and full dataset
+train_norm_df[, -ncol(train_df)] <- predict(norm.values, train_df[, -ncol(train_df)])
+valid_norm_df[, -ncol(valid_df)] <- predict(norm.values, valid_df[, -ncol(valid_df)])
+norm_df[, -ncol(df)] <- predict(norm.values, df[, -ncol(df)])
+
+```
+
+```{r}
+
+# Train netural network model with layer with 5 nodes
+nn_model <- nnet(RESPONSE ~ ., data = train_norm_df, size = 5, decay = 0.01, maxit = 500, linout  = FALSE, trace=TRUE)
+
+```
+
+```{r}
+
+# Neural Network — confusion matrix
+nn_model_pred <- predict(nn_model, valid_norm_df, type = "raw")
+nn_pred_class <- ifelse(nn_model_pred > 0.5, 1, 0)
+confusionMatrix(factor(nn_pred_class), factor(valid_norm_df$RESPONSE), positive = "1")
+
+
+```
+---
+---
+Neural Network CM Results:
+
+Accuracy: 69% — lowest of the three models
+Sensitivity: 75.48% — notably lower than the other two, missing more good applicants
+Specificity: 54.35% — actually the highest of the three, best at catching bad applicants
+Net Profit: (157 × 100) + (42 × -500) = 15,700 - 21,000 = -5,300 DM
+
+
+----
+----
+
+Key Takeaways from CM Results:
+
+- The neural network shows an interesting tradeoff — lowest sensitivity but highest specificity among the three, meaning it's the most conservative in approving applicants
+- Despite that conservatism, it still loses money, landing between logistic regression and the classification tree in net profit
+- Logistic regression remains the best performer overall, which makes it the natural candidate for the lift chart optimization in the last objective
+- All three models being unprofitable at 0.5 threshold strongly reinforces the need for cutoff tuning
+
+
+
+
+### Neural Network Model from "neuralnet" library
+
+```{r}
+
+library(neuralnet)
+
+# Replicating your nnet setup: 1 hidden layer, 5 nodes
+nn_model_2 <- neuralnet(
+  RESPONSE ~ ., 
+  data = train_norm_df, 
+  hidden = 5,               # Your 'size = 5'
+  linear.output = FALSE,    # Your 'linout = FALSE' (activates Logistic output)
+  err.fct = "ce",           # Cross-Entropy is best for binary classification
+  threshold = 0.01,         # Stopping criteria for the gradient
+  stepmax = 1e+05,          # Safety cap on iterations
+  lifesign = "minimal"      # Prints progress so you know it hasn't crashed
+)
+
+# Visualizing the result
+plot(nn_model_2)
+
+```
+
+```{r}
+
+# Generate predictions using predict()
+# It returns a matrix of probabilities directly
+valid_probs <- predict(nn_model_2, valid_norm_df)
+
+# Convert to binary classes
+valid_preds <- ifelse(valid_probs > 0.5, 1, 0)
+
+# Create factors and Confusion Matrix as before
+cm <- confusionMatrix(
+  factor(valid_preds, levels = c(1, 0)), 
+  factor(valid_norm_df$RESPONSE, levels = c(1, 0)),
+  positive = "1"
+)
+
+print(cm)
+
+```
+

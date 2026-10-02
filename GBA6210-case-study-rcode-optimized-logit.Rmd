@@ -1,0 +1,357 @@
+---
+title: "GBA6210 Case Study R-Code"
+author: "Adam Chua"
+date: "2026-04-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+###21.2 German Credit
+**GermanCredit.csv** is the dataset for this case study.
+
+###Background
+Money-lending has been around since the advent of money; it is perhaps the world’s second-oldest profession. The systematic evaluation of credit risk, though, is a relatively recent arrival, and lending was largely based on reputation and very incomplete data. Thomas Jefferson, the third President of the United States, was in debt throughout his life and unreliable in his debt payments, yet people continued to lend him money. It wasn’t until the beginning of the 20th century that the Retail Credit Company was founded to share information about credit. That company is now Equifax, one of the big three credit scoring agencies (the other two are Transunion and Experion).
+
+Individual and local human judgment are now largely irrelevant to the credit reporting process. Credit agencies and other big financial institutions extending credit at the retail level collect huge amounts of data to predict whether defaults or other adverse events will occur, based on numerous customer and transaction information.
+
+###Data
+This case deals with an early stage of the historical transition to predictive modeling, in which humans were employed to label records as either good or poor credit. The German Credit dataset22 has 30 variables and 1000 records, each record being a prior applicant for credit. Each applicant was rated as “good credit” (700 cases) or “bad credit” (300 cases). New applicants for credit can also be evaluated on these 30 predictor variables and classified as a good or a bad credit risk based on the predictor values.
+
+---
+
+```{r}
+
+# Load case study data
+df <- read.csv("GermanCredit.csv", header = TRUE)
+head(df)
+
+```
+
+
+---
+### Quick Data Inspection
+
+```{r}
+
+# Basic Structure
+dim(df)          # rows x columns
+str(df)          # data types of each column
+head(df, 10)     # first 10 rows
+tail(df, 5)      # last 5 rows
+
+```
+```{r}
+# 4. Missing values
+colSums(is.na(df))
+mean(is.na(df))
+sum(is.na(df))
+```
+```{r}
+# 5. Duplicate rows
+sum(duplicated(df))
+```
+
+```{r}
+# 6. Summary statistics
+summary(df)
+```
+
+
+
+```{r}
+# Drop OBS. column
+df <- df[, -1]
+
+```
+
+---
+### Objective 2: Coding Part of the Assignment
+
+Divide the data into training and validation partitions, and develop classification models using the following data mining techniques in R: logistic regression,classification trees, and neural networks.
+```{r}
+
+library(caret)
+
+# seed
+set.seed(1)
+
+
+# Partition into training and valid sets with 70/30 split respectively
+train_rows <- sample(rownames(df), 0.7*nrow(df))
+train_df <- df[train_rows, ]
+
+
+# The remaining subset (30%) will be the valid set
+valid_df <- df[setdiff(rownames(df), train_rows), ]
+
+
+prop.table(table(train_df$RESPONSE))
+prop.table(table(valid_df$RESPONSE))
+```
+---
+---
+
+##Logistic Regression Model
+
+```{r}
+
+# Train initial logistic regression model
+logit_model <- glm(RESPONSE ~ ., data = train_df, family = binomial)
+
+# Display summary
+options(scipen=999)
+summary(logit_model)
+
+```
+```{r}
+# Predict probabilities on validation set
+logit_model_pred <- predict(logit_model, valid_df, type = "response")
+
+# Convert to binary predictions using default of 0.5 cutoff
+logit_pred_class <- ifelse(logit_model_pred > 0.5, 1, 0)
+
+# Confusion matrix
+confusionMatrix(as.factor(logit_pred_class), as.factor(valid_df$RESPONSE), positive = "1")
+
+```
+Logistic Regression CM Results:
+
+
+Accuracy: 75.33% — decent overall performance
+Sensitivity: 86.06% — good at identifying actual good credit applicants
+Specificity: 51.09% — weaker at catching bad credit applicants, meaning a lot of bad applicants are being approved
+Net Profit: (179 × 100) + (45 × -500) = 17,900 - 22,500 = -4,600 DM
+
+---
+---
+
+
+### Optimization by determining propensities
+
+```{r}
+
+# Rank validation records by predicted probability in descending order
+logit_pred_prob <- predict(logit_model, valid_df, type = "response")
+
+
+# Create copy of valid_df to store propensities
+valid_df_copy <- valid_df
+
+# assign propensities to predicted_prob column
+valid_df_copy$predicted_prob <- logit_pred_prob
+
+# create ranked df and rank validation records by predicted probability (descending)
+valid_df_ranked <- valid_df[order(-valid_df_copy$predicted_prob), ]
+
+```
+
+
+
+```{r}
+
+# Net profit vector for each record
+# Good credit (1) leads to 100 DM profit
+# Bad Credit (0) leads to -500 DM profit
+valid_df_ranked$net_profit <- ifelse(valid_df_ranked$RESPONSE == 1, 100, -500)
+```
+
+The net profit vector assigns +100 DM to every actual good credit record and -500 DM to every actual bad credit record, this reflects the real outcome of extending credit to each applicant
+
+
+
+```{r}
+# Assign deciles
+valid_df_ranked$decile <- cut(1:nrow(valid_df_ranked), 
+                               breaks = 10, labels = FALSE)
+
+# Cumulative net profit per decile
+decile_net_profit <- tapply(valid_df_ranked$net_profit, valid_df_ranked$decile, sum)
+cumulative_profit <- cumsum(decile_net_profit)
+good_credit <- tapply(valid_df_ranked$RESPONSE == 1, valid_df_ranked$decile, sum)
+bad_credit <- tapply(valid_df_ranked$RESPONSE == 0, valid_df_ranked$decile, sum)
+
+decile_summary <- data.frame(
+  decile = 1:10,
+  good_credit = as.numeric(good_credit),
+  bad_credit = as.numeric(bad_credit),
+  decile_net_profit = as.numeric(decile_net_profit),
+  cumulative_profit = as.numeric(cumulative_profit)
+)
+
+decile_summary
+
+```
+
+```{r}
+# Decile-wise lift chart
+plot(decile_summary$decile, decile_summary$cumulative_profit,
+     type = "b",
+     col = "darkgreen",
+     pch = 16,
+     xaxt = "n",
+     xlab = "Decile",
+     ylab = "Cumulative Net Profit (DM)",
+     main = "Decile-Wise Chart for Cumulative Net Profit: Default Model")
+
+axis(1, at = 1:10)
+abline(h = 0, lty = 2, col = "red")
+```
+```{r}
+# Find the probability cutoff at the 40th percentile (top 4 deciles)
+default_logit_cutoff <- quantile(valid_df_copy$predicted_prob, 0.60)
+default_logit_cutoff
+```
+
+
+
+
+----
+
+
+### Using approach from lecture
+
+```{r}
+
+library(gains)
+
+# Generate gains object using logistic regression probabilities
+gain <- gains(valid_df$RESPONSE, logit_pred_prob, groups = 10)
+
+```
+
+
+
+```{r}
+# Decile-wise lift chart
+heights <- gain$mean.resp / mean(valid_df$RESPONSE)
+midpoints <- barplot(heights,
+                     names.arg = gain$depth,
+                     ylim = c(0, 2),
+                     xlab = "Percentile",
+                     ylab = "Mean Response",
+                     main = "Decile-Wise Chart for Mean Response: Default Model")
+text(midpoints, heights + 0.05, labels = round(heights, 1), cex = 0.8)
+```
+
+
+---
+---
+
+### Optimization through Stepwise Regression
+
+```{r}
+# Stepwise logistic regression (base R, no library needed)
+logit_model_step <- step(logit_model, direction = "both")
+summary(logit_model_step)
+
+# Predictions on validation set
+logit_step_pred_prob  <- predict(logit_model_step, valid_df, type = "response")
+logit_step_pred_class <- ifelse(logit_step_pred_prob > 0.5, 1, 0)
+
+# Confusion matrix
+confusionMatrix(factor(logit_step_pred_class), factor(valid_df$RESPONSE), positive = "1")
+
+```
+---
+---
+
+### Calcualte Net-Profit vector and Create Decile-Wise charts for Stepwise Logit Model
+```{r}
+
+
+# Generate classifications using valid set
+logit_step_pred_prob <- predict(logit_model_step, valid_df, type = "response")
+
+
+# Create second copy of valid set to store propensities
+valid_df_copy2 <- valid_df
+
+# Store propensities of stepwise model
+valid_df_copy2$predicted_prob <- logit_step_pred_prob
+
+#Ranked validation records by predicted probability (descending)
+valid_df_copy2 <- valid_df_copy2[order(-valid_df_copy2$predicted_prob), ]
+
+```
+
+
+```{r}
+
+# Net profit vector for each record
+valid_df_copy2$net_profit <- ifelse(valid_df_copy2$RESPONSE == 1, 100, -500)
+
+```
+
+
+```{r}
+
+
+# Assign deciles
+valid_df_copy2$decile <- cut(1:nrow(valid_df_copy2),
+                              breaks = 10, labels = FALSE)
+
+# Cumulative net profit per decile
+decile_net_profit <- tapply(valid_df_copy2$net_profit, valid_df_copy2$decile, sum)
+cumulative_profit <- cumsum(decile_net_profit)
+good_credit <- tapply(valid_df_copy2$RESPONSE == 1, valid_df_copy2$decile, sum)
+bad_credit <- tapply(valid_df_copy2$RESPONSE == 0, valid_df_copy2$decile, sum)
+
+decile_summary2 <- data.frame(
+  decile = 1:10,
+  good_credit = as.numeric(good_credit),
+  bad_credit  = as.numeric(bad_credit),
+  decile_net_profit = as.numeric(decile_net_profit),
+  cumulative_profit = as.numeric(cumulative_profit)
+)
+
+decile_summary2
+```
+
+
+
+
+
+```{r}
+plot(decile_summary$decile, decile_summary$cumulative_profit,
+     type  = "b",
+     col   = "darkgreen",
+     pch   = 16,
+     xaxt  = "n",
+     xlab  = "Decile",
+     ylab  = "Cumulative Net Profit (DM)",
+     main  = "Decile-Wise Chart for Cumulative Net Profit: Stepwise Model")
+
+axis(1, at = 1:10)
+abline(h = 0, lty = 2, col = "red")
+```
+
+
+
+
+```{r}
+
+# Gains-based decile-wise lift chart
+library(gains)
+gain2 <- gains(valid_df_copy2$RESPONSE, valid_df_copy2$predicted_prob, groups = 10)
+
+# Decile-wise mean response lift chart
+heights2    <- gain2$mean.resp / mean(valid_df_copy2$RESPONSE)
+midpoints2  <- barplot(heights2,
+                       names.arg = gain2$depth,
+                       ylim = c(0, 2),
+                       xlab = "Percentile",
+                       ylab = "Mean Response",
+                       main = "Decile-Wise Chart for Mean Response: Stepwise Model")
+text(midpoints2, heights2 + 0.05, labels = round(heights2, 1), cex = 0.8)
+```
+
+
+```{r}
+# Find the probability cutoff at the 40th percentile (top 4 deciles)
+stepwise_logit_cutoff <- quantile(valid_df_copy2$predicted_prob, 0.60)
+stepwise_logit_cutoff
+```
+
